@@ -29,6 +29,8 @@ model User {
   calls         Call[]
   escalations   Escalation[]
   assignedCalls Call[] @relation("AssignedCounselor")
+  // Teacher-specific relationships
+  classrooms    Classroom[]
 }
 
 model MoodEntry {

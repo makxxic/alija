@@ -169,21 +169,29 @@ export async function POST(request: NextRequest) {
 
         // Persist the speech transcription as a user message (avoid duplicates)
         try {
-          const existingMsg = await prisma.message.findFirst({
-            where: {
-              conversationId: call.conversation.id,
-              role: 'user',
-              content: speechResult
-            }
-          })
-          if (!existingMsg) {
-            await prisma.message.create({
-              data: {
+          // Ensure we have a conversation for this call; if not, create one and attach it
+          if (!call.conversation) {
+            const conversation = await prisma.conversation.create({ data: { userId: call.userId } })
+            call = await prisma.call.update({ where: { id: call.id }, data: { conversation: { connect: { id: conversation.id } } }, include: { conversation: true } })
+          }
+
+          if (call.conversation) {
+            const existingMsg = await prisma.message.findFirst({
+              where: {
                 conversationId: call.conversation.id,
                 role: 'user',
                 content: speechResult
               }
             })
+            if (!existingMsg) {
+              await prisma.message.create({
+                data: {
+                  conversationId: call.conversation.id,
+                  role: 'user',
+                  content: speechResult
+                }
+              })
+            }
           }
         } catch (msgErr) {
           console.error('Failed to save speech transcription:', msgErr)
@@ -238,8 +246,14 @@ export async function POST(request: NextRequest) {
               }
               const confirmText = confirmTextParts.join(' ')
 
-              // Save assistant confirmation in conversation
-              await prisma.message.create({ data: { conversationId: call.conversation.id, role: 'assistant', content: confirmText } })
+              // Save assistant confirmation in conversation (ensure conversation exists)
+              if (!call.conversation) {
+                const conversation = await prisma.conversation.create({ data: { userId: call.userId } })
+                await prisma.call.update({ where: { id: call.id }, data: { conversation: { connect: { id: conversation.id } } } })
+                await prisma.message.create({ data: { conversationId: conversation.id, role: 'assistant', content: confirmText } })
+              } else {
+                await prisma.message.create({ data: { conversationId: call.conversation.id, role: 'assistant', content: confirmText } })
+              }
 
               // Choose assistant reply: prefer extractor's assistantReply if present
               const speakReply = parsedResult.assistantReply || `${confirmText} Would you like to add more grades?`

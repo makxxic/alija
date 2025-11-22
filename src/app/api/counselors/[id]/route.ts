@@ -33,10 +33,14 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     }
 
     return NextResponse.json(mappedCounselor)
-  } catch (error) {
+  } catch (error: unknown) {
     console.error('Counselor update error:', error)
-    if (error.code === 'P2025') {
-      return NextResponse.json({ error: 'Counselor not found' }, { status: 404 })
+    // Narrow unknown to check prisma error code P2025 (record not found)
+    if (typeof error === 'object' && error !== null && 'code' in error) {
+      const errObj = error as { code?: unknown }
+      if (typeof errObj.code === 'string' && errObj.code === 'P2025') {
+        return NextResponse.json({ error: 'Counselor not found' }, { status: 404 })
+      }
     }
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }

@@ -70,7 +70,7 @@ export async function extractGradesWithOpenAI(text: string): Promise<AIExtractRe
     let parsedUnknown: unknown
     try {
       parsedUnknown = JSON.parse(jsonText)
-    } catch (e) {
+    } catch {
       // Try a looser attempt: replace single quotes with double
       try {
         parsedUnknown = JSON.parse(jsonText.replace(/\'/g, '"'))

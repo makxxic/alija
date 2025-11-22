@@ -64,8 +64,8 @@ export default function Dashboard() {
     license: "",
     bio: "",
   });
-  const [device, setDevice] = useState<Device | null>(null);
-  const [connection, setConnection] = useState<Call | null>(null);
+  const [_device, setDevice] = useState<Device | null>(null);
+  const [_connection, setConnection] = useState<Call | null>(null);
 
   useEffect(() => {
     fetch("/api/dashboard")
