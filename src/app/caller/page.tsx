@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { Device, Call } from "@twilio/voice-sdk";
 
 export default function CallerPage() {
@@ -10,20 +10,9 @@ export default function CallerPage() {
   const [isCalling, setIsCalling] = useState(false);
   const [currentCallSid, setCurrentCallSid] = useState<string | null>(null);
   const [isCheckingCallStatus, setIsCheckingCallStatus] = useState(false);
-  useEffect(() => {
-    initializeTwilio();
-    checkForActiveCall();
+  
 
-    // Cleanup function to destroy device on unmount
-    return () => {
-      if (device) {
-        console.log("Destroying device on component unmount");
-        device.destroy();
-      }
-    };
-  }, []);
-
-  const checkForActiveCall = async () => {
+  const checkForActiveCall = useCallback(async () => {
     try {
       // Check if there's an active call in the database
       const response = await fetch("/api/calls/active-check");
@@ -39,9 +28,9 @@ export default function CallerPage() {
     } catch (error) {
       console.error("Error checking for active call:", error);
     }
-  };
+  }, []);
 
-  const initializeTwilio = async () => {
+  const initializeTwilio = useCallback(async () => {
     // Prevent multiple initializations
     if (device) {
       console.log("Device already initialized");
@@ -86,7 +75,21 @@ export default function CallerPage() {
       console.error("Failed to initialize Twilio:", error);
       setCallStatus("Failed to initialize");
     }
-  };
+  }, [device]);
+
+  // Initialize Twilio and check for active calls once the callbacks are defined.
+  useEffect(() => {
+    initializeTwilio();
+    checkForActiveCall();
+
+    // Cleanup function to destroy device on unmount
+    return () => {
+      if (device) {
+        console.log("Destroying device on component unmount");
+        device.destroy();
+      }
+    };
+  }, [initializeTwilio, checkForActiveCall, device]);
 
   const startCall = async () => {
     if (!device) return;

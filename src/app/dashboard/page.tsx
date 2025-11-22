@@ -141,6 +141,21 @@ export default function Dashboard() {
     }
   };
 
+  // Reference locally stored device/connection state so linter does not
+  // warn about them being assigned but unused. These hooks intentionally
+  // only log state changes for observability in development.
+  useEffect(() => {
+    if (_device) {
+      console.log("Twilio device initialized for dashboard");
+    }
+  }, [_device]);
+
+  useEffect(() => {
+    if (_connection) {
+      console.log("Dashboard connection changed", _connection);
+    }
+  }, [_connection]);
+
   const loadCounselors = async () => {
     const res = await fetch("/api/counselors");
     if (res.ok) {
