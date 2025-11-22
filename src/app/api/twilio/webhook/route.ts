@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAIResponse } from '@/lib/cohere'
 import { prisma } from '@/lib/prisma'
+// Lightweight local type for conversation messages (avoid depending on generated Prisma types at build)
+type ConversationMessage = { role: string; content: string }
 import parseGrades from '@/lib/gradeParser'
 import extractGradesWithOpenAI from '@/lib/gradeExtractorOpenAI'
 
@@ -13,7 +15,7 @@ async function generateConversationSummary(callId: string): Promise<string> {
   if (!call?.conversation) return 'No conversation history available.'
 
   const messages = call.conversation.messages
-  const conversationText = messages.map((m: any) => `${m.role}: ${m.content}`).join('\n')
+  const conversationText = messages.map((m: ConversationMessage) => `${m.role}: ${m.content}`).join('\n')
 
   // Simple summary - in production, use AI to summarize
   return `Conversation summary: ${messages.length} messages exchanged. Key topics: ${conversationText.substring(0, 200)}...`

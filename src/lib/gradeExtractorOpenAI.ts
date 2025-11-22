@@ -42,41 +42,78 @@ export async function extractGradesWithOpenAI(text: string): Promise<AIExtractRe
       setTimeout(() => reject(new Error('AI response timeout')), 10000)
     )
 
-    const completion = await Promise.race([completionPromise, timeoutPromise]) as any
-    const raw = completion?.choices?.[0]?.message?.content
+    const completion = await Promise.race([completionPromise, timeoutPromise]) as unknown
+
+    // Safely extract the assistant text from the OpenAI response without using `any`
+    let raw: string | undefined
+    if (typeof completion === 'object' && completion !== null) {
+      const c = completion as Record<string, unknown>
+      const choices = c['choices']
+      if (Array.isArray(choices) && choices.length > 0) {
+        const first = choices[0]
+        if (typeof first === 'object' && first !== null) {
+          const msg = (first as Record<string, unknown>)['message']
+          if (typeof msg === 'object' && msg !== null) {
+            const content = (msg as Record<string, unknown>)['content']
+            if (typeof content === 'string') raw = content
+          }
+        }
+      }
+    }
+
     if (!raw || typeof raw !== 'string') return empty
 
     // Try to find a JSON object in the response
     const jsonMatch = raw.match(/\{[\s\S]*\}/)
     const jsonText = jsonMatch ? jsonMatch[0] : raw
 
-    let parsed: any
+    let parsedUnknown: unknown
     try {
-      parsed = JSON.parse(jsonText)
+      parsedUnknown = JSON.parse(jsonText)
     } catch (e) {
       // Try a looser attempt: replace single quotes with double
       try {
-        parsed = JSON.parse(jsonText.replace(/\'/g, '"'))
-      } catch (e2) {
+        parsedUnknown = JSON.parse(jsonText.replace(/\'/g, '"'))
+      } catch {
         console.error('Failed to parse JSON from OpenAI output:', raw)
         return { ...empty, assistantReply: 'I had trouble extracting structured grades. Could you rephrase?' }
       }
     }
 
-    const result: AIExtractResult = { entries: [], assistantReply: parsed.assistantReply || undefined }
-    if (parsed.className) result.className = parsed.className
-    if (Array.isArray(parsed.entries)) {
-      for (const e of parsed.entries) {
-        const entry: AIGradeEntry = {
-          studentName: (e.studentName || '').trim(),
-          subject: e.subject || undefined,
-          grade: typeof e.grade === 'number' ? e.grade : (e.grade ? Number(e.grade) : undefined)
+    const parsedObj = (typeof parsedUnknown === 'object' && parsedUnknown !== null) ? parsedUnknown as Record<string, unknown> : {}
+
+    const result: AIExtractResult = { entries: [], assistantReply: undefined }
+    const assistantReplyVal = parsedObj['assistantReply']
+    if (typeof assistantReplyVal === 'string') result.assistantReply = assistantReplyVal
+
+    const classNameVal = parsedObj['className']
+    if (typeof classNameVal === 'string') result.className = classNameVal
+
+    const entriesVal = parsedObj['entries']
+    if (Array.isArray(entriesVal)) {
+      for (const e of entriesVal) {
+        if (typeof e === 'object' && e !== null) {
+          const entryObj = e as Record<string, unknown>
+          const studentName = typeof entryObj['studentName'] === 'string' ? entryObj['studentName'].trim() : ''
+          const subject = typeof entryObj['subject'] === 'string' ? entryObj['subject'] : undefined
+          const gradeRaw = entryObj['grade']
+          let grade: number | undefined
+          if (typeof gradeRaw === 'number') grade = gradeRaw
+          else if (typeof gradeRaw === 'string' && gradeRaw.trim() !== '') {
+            const n = Number(gradeRaw)
+            if (!Number.isNaN(n)) grade = n
+          }
+
+          const entry: AIGradeEntry = { studentName, subject, grade }
+          if (entry.studentName) result.entries.push(entry)
         }
-        if (entry.studentName) result.entries.push(entry)
       }
     }
-    if (Array.isArray(parsed.missing)) result.missing = parsed.missing.map((s: any) => String(s))
-    if (!result.assistantReply) result.assistantReply = parsed.assistantReply || 'I parsed the grades — do you want to add more?'
+
+    const missingVal = parsedObj['missing']
+    if (Array.isArray(missingVal)) result.missing = missingVal.map(s => String(s))
+
+    if (!result.assistantReply) result.assistantReply = 'I parsed the grades — do you want to add more?'
 
     return result
   } catch (err) {
