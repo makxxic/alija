@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAIResponse } from '@/lib/cohere'
 import { prisma } from '@/lib/prisma'
+import parseGrades from '@/lib/gradeParser'
+import extractGradesWithOpenAI from '@/lib/gradeExtractorOpenAI'
 
 async function generateConversationSummary(callId: string): Promise<string> {
   const call = await prisma.call.findUnique({
@@ -11,7 +13,7 @@ async function generateConversationSummary(callId: string): Promise<string> {
   if (!call?.conversation) return 'No conversation history available.'
 
   const messages = call.conversation.messages
-  const conversationText = messages.map(m => `${m.role}: ${m.content}`).join('\n')
+  const conversationText = messages.map((m: any) => `${m.role}: ${m.content}`).join('\n')
 
   // Simple summary - in production, use AI to summarize
   return `Conversation summary: ${messages.length} messages exchanged. Key topics: ${conversationText.substring(0, 200)}...`
@@ -83,6 +85,30 @@ export async function POST(request: NextRequest) {
       return new NextResponse('', { status: 200 })
     }
 
+    // If call is starting (connected) create call + conversation so we track the session
+    if (callStatus === 'in-progress') {
+      const existingCall = await prisma.call.findUnique({ where: { twilioCallSid: callSid } })
+      if (!existingCall) {
+        // Create or find the caller user and attach a conversation and call record
+        const user = await prisma.user.upsert({
+          where: { phone: from },
+          update: {},
+          create: { phone: from, role: 'user' }
+        })
+
+        const conversation = await prisma.conversation.create({ data: { userId: user.id } })
+
+        await prisma.call.create({
+          data: {
+            userId: user.id,
+            twilioCallSid: callSid,
+            status: 'ai_handling',
+            conversation: { connect: { id: conversation.id } }
+          }
+        })
+      }
+    }
+
     // If this is the initial call (no speech result yet)
     if (!speechResult) {
       // Return greeting without database to avoid hangs
@@ -137,6 +163,100 @@ export async function POST(request: NextRequest) {
             },
             include: { conversation: true }
           })
+        }
+
+        // Persist the speech transcription as a user message (avoid duplicates)
+        try {
+          const existingMsg = await prisma.message.findFirst({
+            where: {
+              conversationId: call.conversation.id,
+              role: 'user',
+              content: speechResult
+            }
+          })
+          if (!existingMsg) {
+            await prisma.message.create({
+              data: {
+                conversationId: call.conversation.id,
+                role: 'user',
+                content: speechResult
+              }
+            })
+          }
+        } catch (msgErr) {
+          console.error('Failed to save speech transcription:', msgErr)
+        }
+
+        // If the caller is a teacher, try to parse grades and persist them (use OpenAI extractor first)
+        try {
+          const caller = await prisma.user.findUnique({ where: { id: call.userId } })
+          if (caller && caller.role === 'teacher') {
+            console.log('Teacher caller detected, attempting to parse grades (OpenAI)')
+
+            let parsedResult = await extractGradesWithOpenAI(speechResult)
+            // Fallback to heuristic if OpenAI returned nothing
+            if ((!parsedResult || !parsedResult.entries || parsedResult.entries.length === 0)) {
+              console.log('OpenAI extractor returned no entries; falling back to heuristic parser')
+              const parsed = parseGrades(speechResult)
+              parsedResult = { className: parsed.className, entries: parsed.entries.map(e => ({ studentName: e.studentName, subject: e.subject, grade: e.grade })) }
+            }
+
+            if (parsedResult.entries && parsedResult.entries.length > 0) {
+              // Ensure classroom exists if class name provided
+              let classroomId: string | undefined = undefined
+              if (parsedResult.className) {
+                let classroom = await prisma.classroom.findFirst({ where: { name: parsedResult.className, teacherId: caller.id } })
+                if (!classroom) {
+                  classroom = await prisma.classroom.create({ data: { name: parsedResult.className, teacherId: caller.id } })
+                }
+                classroomId = classroom.id
+              }
+
+              let savedCount = 0
+              for (const e of parsedResult.entries) {
+                const studentName = e.studentName.trim()
+                if (!studentName) continue
+
+                let student = await prisma.student.findFirst({ where: { name: studentName, classroomId } })
+                if (!student) {
+                  student = await prisma.student.create({ data: { name: studentName, classroomId } })
+                }
+
+                if (typeof e.grade === 'number' && !isNaN(e.grade)) {
+                  await prisma.grade.create({ data: { studentId: student.id, subject: e.subject || 'General', value: e.grade } })
+                  savedCount++
+                }
+              }
+
+              // Build confirmation and missing info
+              const confirmTextParts: string[] = []
+              confirmTextParts.push(`Saved ${savedCount} grade(s)${parsedResult.className ? ` for class ${parsedResult.className}` : ''}.`)
+              if (parsedResult.missing && parsedResult.missing.length > 0) {
+                confirmTextParts.push(`I noticed these students mentioned without grades: ${parsedResult.missing.join(', ')}.`)
+              }
+              const confirmText = confirmTextParts.join(' ')
+
+              // Save assistant confirmation in conversation
+              await prisma.message.create({ data: { conversationId: call.conversation.id, role: 'assistant', content: confirmText } })
+
+              // Choose assistant reply: prefer extractor's assistantReply if present
+              const speakReply = parsedResult.assistantReply || `${confirmText} Would you like to add more grades?`
+
+              // Reply to the teacher and gather more input
+              const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<Response>
+  <Say voice="alice">${speakReply}</Say>
+  <Gather input="speech" action="/api/twilio/webhook" method="POST" speechTimeout="3" timeout="10" statusCallback="/api/twilio/webhook" statusCallbackEvent="completed">
+    <Say>Please speak the next entries after the beep.</Say>
+  </Gather>
+  <Say>Thank you. Goodbye.</Say>
+</Response>`
+
+              return new NextResponse(xml, { headers: { 'Content-Type': 'text/xml' } })
+            }
+          }
+        } catch (gradeErr) {
+          console.error('Error parsing/saving grades:', gradeErr)
         }
 
         // Get AI response

@@ -16,13 +16,26 @@ export async function getAIResponse(input: string, callId: string): Promise<stri
   const conversation = call.conversation
 
   // Add user message
-  await prisma.message.create({
-    data: {
-      conversationId: conversation.id,
-      role: 'user',
-      content: input
+  try {
+    const existing = await prisma.message.findFirst({
+      where: {
+        conversationId: conversation.id,
+        role: 'user',
+        content: input
+      }
+    })
+    if (!existing) {
+      await prisma.message.create({
+        data: {
+          conversationId: conversation.id,
+          role: 'user',
+          content: input
+        }
+      })
     }
-  })
+  } catch (e) {
+    console.error('Error saving user message (openai):', e)
+  }
 
   // Get messages for OpenAI
   const messages = conversation.messages.map(m => ({

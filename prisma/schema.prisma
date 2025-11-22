@@ -84,3 +84,32 @@ model Escalation {
   escalatedAt DateTime @default(now())
   notes       String?
 }
+
+// School models for teacher-driven grade entry
+model Classroom {
+  id        String    @id @default(cuid()) @map("_id")
+  name      String
+  teacherId String?
+  teacher   User?     @relation(fields: [teacherId], references: [id])
+  students  Student[]
+}
+
+model Student {
+  id          String   @id @default(cuid()) @map("_id")
+  name        String
+  studentCode String?  @unique
+  classroomId String?
+  classroom   Classroom? @relation(fields: [classroomId], references: [id])
+  grades      Grade[]
+  createdAt   DateTime @default(now())
+}
+
+model Grade {
+  id        String   @id @default(cuid()) @map("_id")
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  subject   String
+  value     Float
+  term      String?
+  date      DateTime @default(now())
+}
